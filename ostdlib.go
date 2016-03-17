@@ -1,6 +1,6 @@
 //
-// Package ottostdlib is a collection of JavaScript objects and functions for standardizing
-// embedding the Otto JavaScript interpreter in Caltech Library Projects.
+// Package ostdlib is a collection of JavaScript objects, functions and polyfill for standardizing
+// embedding Robert Krimen's Otto JavaScript Interpreter.
 //
 // @author R. S. Doiel, <rsdoiel@caltech.edu>
 //
@@ -17,26 +17,83 @@
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-package ottostdlib
+package ostdlib
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	// 3rd Party Packages
-	"github.com/caltechlibrary/otto"
+	// 3rd Party packages
+	"github.com/chzyer/readline"
+	"github.com/robertkrimen/otto"
 )
 
-// AddStdlib attaches various objects to an Otto JS VM
-func AddStdLib(vm *otto.Otto) *otto.Otto {
+// Version of the Otto Standard Library
+const Version = "0.0.0"
+
+// Polyfill addes missing functionality implemented in JavaScript rather than Go
+var Polyfill = `
+	if (!Date.prototype.now) {
+		Date.prototype.now = function now() {
+			'use strict';
+		 	return new Date().getTime();
+		};
+	}
+	if (!String.prototype.repeat) {
+	  String.prototype.repeat = function(count) {
+	    'use strict';
+	    if (this == null) {
+	      throw new TypeError('can\'t convert ' + this + ' to object');
+	    }
+	    var str = '' + this;
+	    count = +count;
+	    if (count != count) {
+	      count = 0;
+	    }
+	    if (count < 0) {
+	      throw new RangeError('repeat count must be non-negative');
+	    }
+	    if (count == Infinity) {
+	      throw new RangeError('repeat count must be less than infinity');
+	    }
+	    count = Math.floor(count);
+	    if (str.length == 0 || count == 0) {
+	      return '';
+	    }
+	    // Ensuring count is a 31-bit integer allows us to heavily optimize the
+	    // main part. But anyway, most current (August 2014) browsers can't handle
+	    // strings 1 << 28 chars or longer, so:
+	    if (str.length * count >= 1 << 28) {
+	      throw new RangeError('repeat count must not overflow maximum string size');
+	    }
+	    var rpt = '';
+	    for (;;) {
+	      if ((count & 1) == 1) {
+	        rpt += str;
+	      }
+	      count >>>= 1;
+	      if (count == 0) {
+	        break;
+	      }
+	      str += str;
+	    }
+	    // Could we try:
+	    // return Array(count + 1).join(this);
+	    return rpt;
+	  }
+	}
+`
+
+// AddExtensions takes an exisitng *otto.Otto (JavaScript VM) and adds os and http objects wrapping some Go native packages
+func AddExtensions(vm *otto.Otto) *otto.Otto {
 	errorObject := func(obj *otto.Object, msg string) otto.Value {
 		if obj == nil {
 			obj, _ = vm.Object(`({})`)
@@ -57,12 +114,7 @@ func AddStdLib(vm *otto.Otto) *otto.Otto {
 
 	// os.args() returns an array of command line args
 	osObj.Set("args", func(call otto.FunctionCall) otto.Value {
-		var args []string
-		if flag.Parsed() == true {
-			args = flag.Args()
-		} else {
-			args = os.Args
-		}
+		args := os.Args
 		results, _ := vm.ToValue(args)
 		return results
 	})
@@ -279,7 +331,7 @@ func AddStdLib(vm *otto.Otto) *otto.Otto {
 
 	httpObj, _ := vm.Object(`http = {}`)
 
-	//HttpGet(uri, headers) returns contents recieved (if any)
+	// http.Get(uri, headers) returns contents recieved (if any)
 	httpObj.Set("get", func(call otto.FunctionCall) otto.Value {
 		var headers []map[string]string
 
@@ -312,10 +364,12 @@ func AddStdLib(vm *otto.Otto) *otto.Otto {
 		}
 		defer resp.Body.Close()
 		content, err := ioutil.ReadAll(resp.Body)
+
+		result, err := vm.ToValue(fmt.Sprintf("%s", content))
 		if err != nil {
-			return errorObject(nil, fmt.Sprintf("Can't read response %s, %s, %s", uri, call.CallerLocation(), err))
+			return errorObject(nil, fmt.Sprintf("http.get(%q, headers) error, %s, %s", uri, call.CallerLocation(), err))
 		}
-		return responseObject(content)
+		return result
 	})
 
 	// HttpPost(uri, headers, payload) returns contents recieved (if any)
@@ -326,7 +380,7 @@ func AddStdLib(vm *otto.Otto) *otto.Otto {
 		mimeType := call.Argument(1).String()
 		payload := call.Argument(2).String()
 		buf := strings.NewReader(payload)
-		// Process any additional headers past to HttpPost()
+		// Process any additional headers past to http.Post()
 		if len(call.ArgumentList) > 2 {
 			rawObjs, err := call.Argument(3).Export()
 			if err != nil {
@@ -361,69 +415,93 @@ func AddStdLib(vm *otto.Otto) *otto.Otto {
 		}
 		result, err := vm.ToValue(fmt.Sprintf("%s", content))
 		if err != nil {
-			return errorObject(nil, fmt.Sprintf("HttpGet(%q) error, %s, %s", uri, call.CallerLocation(), err))
+			return errorObject(nil, fmt.Sprintf("http.post(%q, headers, payload) error, %s, %s", uri, call.CallerLocation(), err))
 		}
 		return result
 	})
 
-	//
-	// Add JS Polyfills as needed
-	//
-	polyfil := `
-	if (!Date.prototype.now) {
-		Date.prototype.now = function now() {
-			'use strict';
-		 	return new Date().getTime();
-		};
-	}
-	if (!String.prototype.repeat) {
-	  String.prototype.repeat = function(count) {
-	    'use strict';
-	    if (this == null) {
-	      throw new TypeError('can\'t convert ' + this + ' to object');
-	    }
-	    var str = '' + this;
-	    count = +count;
-	    if (count != count) {
-	      count = 0;
-	    }
-	    if (count < 0) {
-	      throw new RangeError('repeat count must be non-negative');
-	    }
-	    if (count == Infinity) {
-	      throw new RangeError('repeat count must be less than infinity');
-	    }
-	    count = Math.floor(count);
-	    if (str.length == 0 || count == 0) {
-	      return '';
-	    }
-	    // Ensuring count is a 31-bit integer allows us to heavily optimize the
-	    // main part. But anyway, most current (August 2014) browsers can't handle
-	    // strings 1 << 28 chars or longer, so:
-	    if (str.length * count >= 1 << 28) {
-	      throw new RangeError('repeat count must not overflow maximum string size');
-	    }
-	    var rpt = '';
-	    for (;;) {
-	      if ((count & 1) == 1) {
-	        rpt += str;
-	      }
-	      count >>>= 1;
-	      if (count == 0) {
-	        break;
-	      }
-	      str += str;
-	    }
-	    // Could we try:
-	    // return Array(count + 1).join(this);
-	    return rpt;
-	  }
-	}
-`
-	script, err := vm.Compile("polyfil", polyfil)
+	script, err := vm.Compile("polyfill", Polyfill)
 	if err != nil {
-		log.Fatalf("polyfil compile error: %s\n\n%s\n", err, polyfil)
+		log.Fatalf("polyfill compile error: %s\n\n%s\n", err, Polyfill)
 	}
 	vm.Eval(script)
 	return vm
+}
+
+// Provide a Repl for working with IxIF content via JavaScript
+// args holds the command line parameters passed to the repl for processing by a script in interactively in the repl.
+// Returns an integer value suitable to pass to os.Exit().
+func Repl(vm *otto.Otto) {
+	autoCompleter := readline.NewPrefixCompleter(
+		// Autocomplete for os object
+		readline.PcItem("os.args()"),
+		readline.PcItem("os.exit(exitCode)"),
+		readline.PcItem("os.getEnv(envvar)"),
+		readline.PcItem("os.readFile(filename)"),
+		readline.PcItem("os.writeFile(filename, data)"),
+		readline.PcItem("os.rename(oldname, newname)"),
+		readline.PcItem("os.remove(filename)"),
+		readline.PcItem("os.chmod(filename, perms)"),
+		readline.PcItem("os.find(filename)"),
+		readline.PcItem("os.mkdir(dirname)"),
+		readline.PcItem("os.mkdirAll(dirpath)"),
+		readline.PcItem("os.rmdir(dirname)"),
+		readline.PcItem("os.rmdirAll(dirpath)"),
+		// Autocompleter for http object
+		readline.PcItem("http.get(url, headers)"),
+		readline.PcItem("http.post(url, headers, payload)"),
+	)
+
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir, _ = filepath.Abs(".")
+	}
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:       "> ",
+		HistoryFile:  path.Join(homeDir, ".ottomatic_history"),
+		AutoComplete: autoCompleter,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer rl.Close()
+
+	for i := 1; true; i++ {
+		line, err := rl.Readline()
+		if err != nil { // io.EOF, readline.ErrInterrupt
+			break
+		}
+		script, _ := vm.Compile(fmt.Sprintf("command %d", i), line)
+		vm.Eval(script)
+	}
+}
+
+//
+// This is extenion to the original otto
+//
+
+// ToStruct will attempt populate a struct passed in as a parameter.
+//
+// ToStruct returns an error if it runs into a problem.
+//
+// Example:
+// a := struct{One int, Two string}{}
+// val, _ := vm.Run(`(function (){ return {One: 1, Two: "two"}}())`)
+// _ := val.ToSruct(&a)
+// fmt.Printf("One: %d, Two: %s\n", a.One, a.Two)
+//
+func ToStruct(value otto.Value, aStruct interface{}) error {
+	raw, err := value.Export()
+	if err != nil {
+		return fmt.Errorf("failed to export value, %s", err)
+	}
+	src, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value, %s", err)
+	}
+	err = json.Unmarshal(src, &aStruct)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal value, %s", err)
+	}
+	return nil
 }

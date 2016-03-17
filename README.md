@@ -1,3 +1,4 @@
-# ottostdlib
+# ostdlib
 
-Standard JavaScript objects and functions for use when we embed Otto in our tools.
+Standard JavaScript objects and functions for use when embedding Otto.
+
