@@ -21,6 +21,7 @@ package ostdlib
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -112,9 +113,14 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 
 	osObj, _ := vm.Object(`os = {}`)
 
-	// os.args() returns an array of command line args
+	// os.args() returns an array of command line args after flag.Parse() has occurred.
 	osObj.Set("args", func(call otto.FunctionCall) otto.Value {
-		args := os.Args
+		var args []string
+		if flag.Parsed() == true {
+			args = flag.Args()
+		} else {
+			args = os.Args
+		}
 		results, _ := vm.ToValue(args)
 		return results
 	})
