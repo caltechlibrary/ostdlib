@@ -93,16 +93,7 @@ var Polyfill = `
 	}
 `
 
-// JavaScriptVM is a wrapper for *otto.Otto to make it easy to add features without forking Otto.
-// FIXME: Need to come up with a clean way to consistantly extend Otto's JavaScript VM
-// and easily add helpful features like ToStruct(), additional AutoComplete phrases, smart help, etc.
-// Help is structured accessed through a map of maps where k1 = Object, k2 = function name, value help message
-type JavaScriptVM struct {
-	VM            *otto.Otto
-	AutoCompleter readline.AutoCompleter
-	Help          map[string]map[string]*HelpMsg
-}
-
+// HelpMsg supports storing interactive help content
 type HelpMsg struct {
 	Object   string
 	Function string
@@ -110,10 +101,19 @@ type HelpMsg struct {
 	Msg      string
 }
 
+// JavaScriptVM is a wrapper for *otto.Otto to make it easy to add features without forking Otto.
+type JavaScriptVM struct {
+	VM            *otto.Otto
+	AutoCompleter readline.AutoCompleter
+	Help          map[string][]*HelpMsg
+}
+
 // New create a new JavaScriptVM structure extending the functionality of *otto.Otto
 func New(vm *otto.Otto) *JavaScriptVM {
 	js := new(JavaScriptVM)
 	js.VM = vm
+	js.Help = make(map[string][]*HelpMsg)
+
 	// FIXME: Look at SetChildren() and GetChildren to augument this auto complete list.
 	js.AutoCompleter = readline.NewPrefixCompleter(
 		// Autocomplete for os object
@@ -139,33 +139,89 @@ func New(vm *otto.Otto) *JavaScriptVM {
 
 // SetHelp adds help documentation by object and function
 func (js *JavaScriptVM) SetHelp(objectName string, functionName string, params []string, text string) {
-	help := new(HelpMsg)
-	help.Object = objectName
-	help.Function = functionName
-	help.Params = params
-	help.Msg = text
-	//FIXME: How to I make sure js.Help is not a nil map?
-	js.Help[objectName][functionName] = help
+	if objectName == "" {
+		return
+	}
+	msg := new(HelpMsg)
+	msg.Object = objectName
+	msg.Function = functionName
+	msg.Params = params
+	msg.Msg = text
+
+	if data, ok := js.Help[objectName]; ok == true {
+		data = append(data, msg)
+		js.Help[objectName] = data
+		return
+	}
+	var data []*HelpMsg
+	data = append(data, msg)
+	js.Help[objectName] = data
 }
 
 // GetHelp retrieves help text by object and function names
-func (js *JavaScriptVM) GetHelp(objectName, functionName string) string {
+func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
 	if objectName == "" {
-		objectName = "-"
-	}
-	if functionName == "" {
-		functionName = "-"
-	}
-	if msg, ok := js.Help[objectName][functionName]; ok == true {
-		switch {
-		case objectName == "-" && functionName == "-":
-			return fmt.Sprintf(`help() %s`, msg.Msg)
-		case functionName == "-":
-			return fmt.Sprintf(`%s. %s`, msg.Object, msg.Msg)
+		s := []string{"help provides information about objects and functions"}
+		for ky := range js.Help {
+			s = append(s, ky)
 		}
-		return fmt.Sprintf(`%s.%s(%s) %s`, msg.Object, msg.Function, strings.Join(msg.Params, ", "), msg.Msg)
+		fmt.Printf("%s\n", strings.Join(s, "\n   "))
+		// return fmt.Sprintf("%s\n", strings.Join(s, "\n  "))
+		return
 	}
-	return ""
+	s := []string{fmt.Sprintf("%s", objectName)}
+	if topics, ok := js.Help[objectName]; ok == true {
+		for _, msg := range topics {
+			if functionName == "" {
+				t := fmt.Sprintf(`%s.%s(%s)`, msg.Object, msg.Function, strings.Join(msg.Params, ", "))
+				s = append(s, t)
+			} else if functionName == msg.Function {
+				t := fmt.Sprintf("%s.%s(%s)\n    %s", msg.Object, msg.Function, strings.Join(msg.Params, ", "), msg.Msg)
+				s = append(s, t)
+			}
+		}
+	}
+	fmt.Printf("%s\n", strings.Join(s, "\n  "))
+	return
+}
+
+// AddHelp adds the interactive help based on the extensions defined in ostdlib
+func (js *JavaScriptVM) AddHelp() {
+	js.SetHelp("os", "args", []string{}, "Exposes any command line arguments left after flag.Parse() has run.")
+	js.SetHelp("os", "exit", []string{"exitCode int"}, "Stops the program existing with the numeric value given(e.g. zero if everything is OK)")
+	js.SetHelp("os", "getEnv", []string{"envvar string"}, `Gets the environment variable matching the structing. (e.g. os.getEnv(\"HOME\")`)
+	js.SetHelp("os", "readFile", []string{"filepath"}, "Reads the filename provided and returns the results as a JavaScript string")
+	js.SetHelp("os", "writeFile", []string{"filepath string", "content string"}, "Writes a file, parameters are filepath and contents which are both strings")
+	js.SetHelp("os", "rename", []string{"oldpath string", "newpath string"}, "Renames oldpath to newpath")
+	js.SetHelp("os", "remove", []string{"filepath string"}, "Removes the file indicated by filepath")
+	js.SetHelp("os", "chmod", []string{"filepath string", "perms numeric"}, "Sets the permissions for a file (e.g. 0775, 0664)")
+	js.SetHelp("os", "find", []string{"startpath string"}, "Looks for a files in startpath")
+	js.SetHelp("os", "mkdir", []string{"pathname string", "perms numeric"}, "Makes a directory with the permissions (e.g. 0775)")
+	js.SetHelp("os", "mkdirAll", []string{"pathname string", "perms numeric"}, "Makes a directory including missing ones in the path. E.g mkdir -p in Unix shell")
+	js.SetHelp("os", "rmdir", []string{"pathname string"}, "Removes the directory specified with pathname")
+	js.SetHelp("os", "rmdirAll", []string{"pathname string"}, "Removes a directory and any included in pathname")
+	js.SetHelp("http", "get", []string{"uri string", "headers []object"}, "performs a synchronous http GET operation")
+	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
+	js.VM.Set("help", func(call otto.FunctionCall) otto.Value {
+		objectName := ""
+		functionName := ""
+		if len(call.ArgumentList) > 0 {
+			s := call.Argument(0).String()
+			p := strings.Split(s, ".")
+			if len(p) == 1 {
+				objectName = p[0]
+			}
+			if len(p) == 2 {
+				objectName, functionName = p[0], p[1]
+			}
+		}
+		js.GetHelp(objectName, functionName)
+		// text := js.GetHelp(objectName, functionName)
+		// fmt.Println(text)
+		// result, _ := js.VM.ToValue(text)
+		// return result
+		return otto.Value{}
+	})
 }
 
 // AddExtensions takes an exisitng *otto.Otto (JavaScript VM) and adds os and http objects wrapping some Go native packages
@@ -186,28 +242,8 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return obj.Value()
 	}
 
-	js.SetHelp("-", "-", []string{}, `Display usage information by object and function names. E.g. help(), help("os"), help("os","exit")`)
-	js.VM.Set("help", func(call otto.FunctionCall) otto.Value {
-		var (
-			objectName   = "-"
-			functionName = "-"
-		)
-		switch {
-		case len(call.ArgumentList) == 1:
-			objectName = call.Argument(0).String()
-		default:
-			objectName = call.Argument(0).String()
-			functionName = call.Argument(1).String()
-		}
-		text := js.GetHelp(objectName, functionName)
-		result, _ := js.VM.ToValue(text)
-		return result
-	})
-
-	js.SetHelp("os", "-", []string{}, "Provides accession to operating systems function like reading/writing files")
 	osObj, _ := js.VM.Object(`os = {}`)
 
-	js.SetHelp("os", "args", []string{}, "Exposes any command line arguments left after flag.Parse() has run.")
 	// os.args() returns an array of command line args after flag.Parse() has occurred.
 	osObj.Set("args", func(call otto.FunctionCall) otto.Value {
 		var args []string
@@ -220,7 +256,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return results
 	})
 
-	js.SetHelp("os", "exit", []string{"exitCode int"}, "Stops the program existing with the numeric value given(e.g. zero if everything is OK)")
 	// os.exit()
 	osObj.Set("exit", func(call otto.FunctionCall) otto.Value {
 		exitCode := 0
@@ -232,7 +267,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return responseObject(exitCode)
 	})
 
-	js.SetHelp("os", "getEnv", []string{"envvar string"}, `Gets the environment variable matching the structing. (e.g. os.getEnv(\"HOME\")`)
 	// os.getEnv(env_varname) returns empty string or the value found as a string
 	osObj.Set("getEnv", func(call otto.FunctionCall) otto.Value {
 		envvar := call.Argument(0).String()
@@ -243,7 +277,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "readFile", []string{"filepath"}, "Reads the filename provided and returns the results as a JavaScript string")
 	// os.readFile(filepath) returns the content of the filepath or empty string
 	osObj.Set("readFile", func(call otto.FunctionCall) otto.Value {
 		filename := call.Argument(0).String()
@@ -258,7 +291,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "writeFile", []string{"filepath string", "content string"}, "Writes a file, parameters are filepath and contents which are both strings")
 	// os.writeFile(filepath, contents) returns true on sucess, false on failure
 	osObj.Set("writeFile", func(call otto.FunctionCall) otto.Value {
 		filename := call.Argument(0).String()
@@ -274,7 +306,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "rename", []string{"oldpath string", "newpath string"}, "Renames oldpath to newpath")
 	// os.rename(oldpath, newpath) renames a path returns an error object or true on success
 	osObj.Set("rename", func(call otto.FunctionCall) otto.Value {
 		oldpath := call.Argument(0).String()
@@ -287,7 +318,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "remove", []string{"filepath string"}, "Removes the file indicated by filepath")
 	// os.remove(filepath) returns an error object or true if successful
 	osObj.Set("remove", func(call otto.FunctionCall) otto.Value {
 		pathname := call.Argument(0).String()
@@ -311,7 +341,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "chmod", []string{"filepath string", "perms numeric"}, "Sets the permissions for a file (e.g. 0775, 0664)")
 	// os.chmod(filepath, perms) returns an error object or true if successful
 	osObj.Set("chmod", func(call otto.FunctionCall) otto.Value {
 		filename := call.Argument(0).String()
@@ -335,7 +364,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "find", []string{"startpath string"}, "Looks for a files in startpath")
 	// os.find(startpath) returns an array of path names
 	osObj.Set("find", func(call otto.FunctionCall) otto.Value {
 		var dirs []string
@@ -354,7 +382,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "mkdir", []string{"pathname string", "perms numeric"}, "Makes a directory with the permissions (e.g. 0775)")
 	// os.mkdir(pathname, perms) return an error object or true
 	osObj.Set("mkdir", func(call otto.FunctionCall) otto.Value {
 		newpath := call.Argument(0).String()
@@ -373,7 +400,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "mkdirAll", []string{"pathname string", "perms numeric"}, "Makes a directory including missing ones in the path. E.g mkdir -p in Unix shell")
 	// os.mkdir(pathname, perms) return an error object or true
 	osObj.Set("mkdirAll", func(call otto.FunctionCall) otto.Value {
 		newpath := call.Argument(0).String()
@@ -392,7 +418,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "rmdir", []string{"pathname string"}, "Removes the directory specified with pathname")
 	// os.rmdir(pathname) returns an error object or true if successful
 	osObj.Set("rmdir", func(call otto.FunctionCall) otto.Value {
 		pathname := call.Argument(0).String()
@@ -417,7 +442,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("os", "rmdirAll", []string{"pathname string"}, "Removes a directory and any included in pathname")
 	// os.rmdirAll(pathname) returns an error object or true if successful
 	osObj.Set("rmdirAll", func(call otto.FunctionCall) otto.Value {
 		pathname := call.Argument(0).String()
@@ -442,10 +466,8 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("http", "-", []string{}, "The http object provides synchronous GET and POST methods")
 	httpObj, _ := js.VM.Object(`http = {}`)
 
-	js.SetHelp("http", "get", []string{"uri string", "headers []object"}, "performs a synchronous http GET operation")
 	// http.Get(uri, headers) returns contents recieved (if any)
 	httpObj.Set("get", func(call otto.FunctionCall) otto.Value {
 		var headers []map[string]string
@@ -487,7 +509,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return result
 	})
 
-	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
 	// HttpPost(uri, headers, payload) returns contents recieved (if any)
 	httpObj.Set("post", func(call otto.FunctionCall) otto.Value {
 		var headers []map[string]string
@@ -544,11 +565,8 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	return js.VM
 }
 
-// Provide a Repl for working with IxIF content via JavaScript
-// args holds the command line parameters passed to the repl for processing by a script in interactively in the repl.
-// Returns an integer value suitable to pass to os.Exit().
+// Repl provides interactive JavaScript shell supporting autocomplete and command history
 func (js *JavaScriptVM) Repl() {
-
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		homeDir, _ = filepath.Abs(".")

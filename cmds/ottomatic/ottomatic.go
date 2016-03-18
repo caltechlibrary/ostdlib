@@ -54,8 +54,11 @@ func main() {
 	// Create our JavaScriptVM
 	vm := otto.New()
 	js := ostdlib.New(vm)
+
 	// Add objects (e.g. os, http and polyfills)
-	vm = js.AddExtensions()
+	js.AddExtensions()
+	// Add extension help
+	js.AddHelp()
 
 	args := flag.Args()
 	if len(args) == 0 {
