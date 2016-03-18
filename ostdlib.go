@@ -103,9 +103,10 @@ type HelpMsg struct {
 
 // JavaScriptVM is a wrapper for *otto.Otto to make it easy to add features without forking Otto.
 type JavaScriptVM struct {
-	VM            *otto.Otto
-	AutoCompleter readline.AutoCompleter
-	Help          map[string][]*HelpMsg
+	VM                *otto.Otto
+	AutoCompleter     *readline.PrefixCompleter
+	AutoCompleteTerms []string
+	Help              map[string][]*HelpMsg
 }
 
 // New create a new JavaScriptVM structure extending the functionality of *otto.Otto
@@ -114,26 +115,7 @@ func New(vm *otto.Otto) *JavaScriptVM {
 	js.VM = vm
 	js.Help = make(map[string][]*HelpMsg)
 
-	// FIXME: Look at SetChildren() and GetChildren to augument this auto complete list.
-	js.AutoCompleter = readline.NewPrefixCompleter(
-		// Autocomplete for os object
-		readline.PcItem("os.args()"),
-		readline.PcItem("os.exit(exitCode)"),
-		readline.PcItem("os.getEnv(envvar)"),
-		readline.PcItem("os.readFile(filename)"),
-		readline.PcItem("os.writeFile(filename, data)"),
-		readline.PcItem("os.rename(oldname, newname)"),
-		readline.PcItem("os.remove(filename)"),
-		readline.PcItem("os.chmod(filename, perms)"),
-		readline.PcItem("os.find(filename)"),
-		readline.PcItem("os.mkdir(dirname)"),
-		readline.PcItem("os.mkdirAll(dirpath)"),
-		readline.PcItem("os.rmdir(dirname)"),
-		readline.PcItem("os.rmdirAll(dirpath)"),
-		// Autocompleter for http object
-		readline.PcItem("http.get(url, headers)"),
-		readline.PcItem("http.post(url, headers, payload)"),
-	)
+	js.AutoCompleter = readline.NewPrefixCompleter()
 	return js
 }
 
@@ -147,6 +129,14 @@ func (js *JavaScriptVM) SetHelp(objectName string, functionName string, params [
 	msg.Function = functionName
 	msg.Params = params
 	msg.Msg = text
+
+	var name string
+	if len(msg.Params) == 0 {
+		name = fmt.Sprintf(`%s.%s()`, msg.Object, msg.Function)
+	} else {
+		name = fmt.Sprintf(`%s.%s(%s)`, msg.Object, msg.Function, strings.Join(msg.Params, ", "))
+	}
+	js.AutoCompleteTerms = append(js.AutoCompleteTerms, name)
 
 	if data, ok := js.Help[objectName]; ok == true {
 		data = append(data, msg)
@@ -185,6 +175,16 @@ func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
 	return
 }
 
+func (js *JavaScriptVM) SetupAutoComplete() {
+	completer := readline.NewPrefixCompleter(readline.PcItem("help()"))
+	children := completer.GetChildren()
+	for _, text := range js.AutoCompleteTerms {
+		children = append(children, readline.PcItem(text))
+	}
+	completer.SetChildren(children)
+	js.AutoCompleter = completer
+}
+
 // AddHelp adds the interactive help based on the extensions defined in ostdlib
 func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("os", "args", []string{}, "Exposes any command line arguments left after flag.Parse() has run.")
@@ -207,6 +207,9 @@ func (js *JavaScriptVM) AddHelp() {
 		functionName := ""
 		if len(call.ArgumentList) > 0 {
 			s := call.Argument(0).String()
+			if pos := strings.Index(s, "("); pos > -1 {
+				s = s[0:pos]
+			}
 			p := strings.Split(s, ".")
 			if len(p) == 1 {
 				objectName = p[0]
@@ -216,10 +219,6 @@ func (js *JavaScriptVM) AddHelp() {
 			}
 		}
 		js.GetHelp(objectName, functionName)
-		// text := js.GetHelp(objectName, functionName)
-		// fmt.Println(text)
-		// result, _ := js.VM.ToValue(text)
-		// return result
 		return otto.Value{}
 	})
 }
@@ -565,6 +564,24 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	return js.VM
 }
 
+// Runner given a list of JavaScript filenames run the files
+func (js *JavaScriptVM) Runner(filenames []string) {
+	for _, fname := range filenames {
+		src, err := ioutil.ReadFile(fname)
+		if err != nil {
+			log.Fatalf("Can't read file %s, %s", fname, err)
+		}
+		script, err := js.VM.Compile(fname, src)
+		if err != nil {
+			log.Fatalf("%s", err)
+		}
+		_, err = js.VM.Eval(script)
+		if err != nil {
+			log.Fatalf("%s", err)
+		}
+	}
+}
+
 // Repl provides interactive JavaScript shell supporting autocomplete and command history
 func (js *JavaScriptVM) Repl() {
 	homeDir := os.Getenv("HOME")
@@ -594,7 +611,7 @@ func (js *JavaScriptVM) Repl() {
 }
 
 //
-// This is extenion to the original otto
+// This is an extenion to the original otto value methods
 //
 
 // ToStruct will attempt populate a struct passed in as a parameter.
@@ -604,7 +621,7 @@ func (js *JavaScriptVM) Repl() {
 // Example:
 // a := struct{One int, Two string}{}
 // val, _ := vm.Run(`(function (){ return {One: 1, Two: "two"}}())`)
-// _ := val.ToSruct(&a)
+// _ := ToSruct(val, &a)
 // fmt.Printf("One: %d, Two: %s\n", a.One, a.Two)
 //
 func ToStruct(value otto.Value, aStruct interface{}) error {
