@@ -93,11 +93,86 @@ var Polyfill = `
 	}
 `
 
+// JavaScriptVM is a wrapper for *otto.Otto to make it easy to add features without forking Otto.
+// FIXME: Need to come up with a clean way to consistantly extend Otto's JavaScript VM
+// and easily add helpful features like ToStruct(), additional AutoComplete phrases, smart help, etc.
+// Help is structured accessed through a map of maps where k1 = Object, k2 = function name, value help message
+type JavaScriptVM struct {
+	VM            *otto.Otto
+	AutoCompleter readline.AutoCompleter
+	Help          map[string]map[string]*HelpMsg
+}
+
+type HelpMsg struct {
+	Object   string
+	Function string
+	Params   []string
+	Msg      string
+}
+
+// New create a new JavaScriptVM structure extending the functionality of *otto.Otto
+func New(vm *otto.Otto) *JavaScriptVM {
+	js := new(JavaScriptVM)
+	js.VM = vm
+	// FIXME: Look at SetChildren() and GetChildren to augument this auto complete list.
+	js.AutoCompleter = readline.NewPrefixCompleter(
+		// Autocomplete for os object
+		readline.PcItem("os.args()"),
+		readline.PcItem("os.exit(exitCode)"),
+		readline.PcItem("os.getEnv(envvar)"),
+		readline.PcItem("os.readFile(filename)"),
+		readline.PcItem("os.writeFile(filename, data)"),
+		readline.PcItem("os.rename(oldname, newname)"),
+		readline.PcItem("os.remove(filename)"),
+		readline.PcItem("os.chmod(filename, perms)"),
+		readline.PcItem("os.find(filename)"),
+		readline.PcItem("os.mkdir(dirname)"),
+		readline.PcItem("os.mkdirAll(dirpath)"),
+		readline.PcItem("os.rmdir(dirname)"),
+		readline.PcItem("os.rmdirAll(dirpath)"),
+		// Autocompleter for http object
+		readline.PcItem("http.get(url, headers)"),
+		readline.PcItem("http.post(url, headers, payload)"),
+	)
+	return js
+}
+
+// SetHelp adds help documentation by object and function
+func (js *JavaScriptVM) SetHelp(objectName string, functionName string, params []string, text string) {
+	help := new(HelpMsg)
+	help.Object = objectName
+	help.Function = functionName
+	help.Params = params
+	help.Msg = text
+	//FIXME: How to I make sure js.Help is not a nil map?
+	js.Help[objectName][functionName] = help
+}
+
+// GetHelp retrieves help text by object and function names
+func (js *JavaScriptVM) GetHelp(objectName, functionName string) string {
+	if objectName == "" {
+		objectName = "-"
+	}
+	if functionName == "" {
+		functionName = "-"
+	}
+	if msg, ok := js.Help[objectName][functionName]; ok == true {
+		switch {
+		case objectName == "-" && functionName == "-":
+			return fmt.Sprintf(`help() %s`, msg.Msg)
+		case functionName == "-":
+			return fmt.Sprintf(`%s. %s`, msg.Object, msg.Msg)
+		}
+		return fmt.Sprintf(`%s.%s(%s) %s`, msg.Object, msg.Function, strings.Join(msg.Params, ", "), msg.Msg)
+	}
+	return ""
+}
+
 // AddExtensions takes an exisitng *otto.Otto (JavaScript VM) and adds os and http objects wrapping some Go native packages
-func AddExtensions(vm *otto.Otto) *otto.Otto {
+func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	errorObject := func(obj *otto.Object, msg string) otto.Value {
 		if obj == nil {
-			obj, _ = vm.Object(`({})`)
+			obj, _ = js.VM.Object(`({})`)
 		}
 		log.Println(msg)
 		obj.Set("status", "error")
@@ -107,12 +182,32 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 
 	responseObject := func(data interface{}) otto.Value {
 		src, _ := json.Marshal(data)
-		obj, _ := vm.Object(fmt.Sprintf(`(%s)`, src))
+		obj, _ := js.VM.Object(fmt.Sprintf(`(%s)`, src))
 		return obj.Value()
 	}
 
-	osObj, _ := vm.Object(`os = {}`)
+	js.SetHelp("-", "-", []string{}, `Display usage information by object and function names. E.g. help(), help("os"), help("os","exit")`)
+	js.VM.Set("help", func(call otto.FunctionCall) otto.Value {
+		var (
+			objectName   = "-"
+			functionName = "-"
+		)
+		switch {
+		case len(call.ArgumentList) == 1:
+			objectName = call.Argument(0).String()
+		default:
+			objectName = call.Argument(0).String()
+			functionName = call.Argument(1).String()
+		}
+		text := js.GetHelp(objectName, functionName)
+		result, _ := js.VM.ToValue(text)
+		return result
+	})
 
+	js.SetHelp("os", "-", []string{}, "Provides accession to operating systems function like reading/writing files")
+	osObj, _ := js.VM.Object(`os = {}`)
+
+	js.SetHelp("os", "args", []string{}, "Exposes any command line arguments left after flag.Parse() has run.")
 	// os.args() returns an array of command line args after flag.Parse() has occurred.
 	osObj.Set("args", func(call otto.FunctionCall) otto.Value {
 		var args []string
@@ -121,10 +216,11 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		} else {
 			args = os.Args
 		}
-		results, _ := vm.ToValue(args)
+		results, _ := js.VM.ToValue(args)
 		return results
 	})
 
+	js.SetHelp("os", "exit", []string{"exitCode int"}, "Stops the program existing with the numeric value given(e.g. zero if everything is OK)")
 	// os.exit()
 	osObj.Set("exit", func(call otto.FunctionCall) otto.Value {
 		exitCode := 0
@@ -136,16 +232,18 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		return responseObject(exitCode)
 	})
 
+	js.SetHelp("os", "getEnv", []string{"envvar string"}, `Gets the environment variable matching the structing. (e.g. os.getEnv(\"HOME\")`)
 	// os.getEnv(env_varname) returns empty string or the value found as a string
 	osObj.Set("getEnv", func(call otto.FunctionCall) otto.Value {
 		envvar := call.Argument(0).String()
-		result, err := vm.ToValue(os.Getenv(envvar))
+		result, err := js.VM.ToValue(os.Getenv(envvar))
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.getEnv(%q), %s", call.CallerLocation(), envvar, err))
 		}
 		return result
 	})
 
+	js.SetHelp("os", "readFile", []string{"filepath"}, "Reads the filename provided and returns the results as a JavaScript string")
 	// os.readFile(filepath) returns the content of the filepath or empty string
 	osObj.Set("readFile", func(call otto.FunctionCall) otto.Value {
 		filename := call.Argument(0).String()
@@ -153,13 +251,14 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.readFile(%q), %s", call.CallerLocation(), filename, err))
 		}
-		result, err := vm.ToValue(fmt.Sprintf("%s", buf))
+		result, err := js.VM.ToValue(fmt.Sprintf("%s", buf))
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.readFile(%q), %s", call.CallerLocation(), filename, err))
 		}
 		return result
 	})
 
+	js.SetHelp("os", "writeFile", []string{"filepath string", "content string"}, "Writes a file, parameters are filepath and contents which are both strings")
 	// os.writeFile(filepath, contents) returns true on sucess, false on failure
 	osObj.Set("writeFile", func(call otto.FunctionCall) otto.Value {
 		filename := call.Argument(0).String()
@@ -168,13 +267,14 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.writeFile(%q, %q), %s", call.CallerLocation(), filename, buf, err))
 		}
-		result, err := vm.ToValue(buf)
+		result, err := js.VM.ToValue(buf)
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.writeFile(%q, %q), %s", call.CallerLocation(), filename, buf, err))
 		}
 		return result
 	})
 
+	js.SetHelp("os", "rename", []string{"oldpath string", "newpath string"}, "Renames oldpath to newpath")
 	// os.rename(oldpath, newpath) renames a path returns an error object or true on success
 	osObj.Set("rename", func(call otto.FunctionCall) otto.Value {
 		oldpath := call.Argument(0).String()
@@ -183,10 +283,11 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.rename(%q, %q), %s", call.CallerLocation(), oldpath, newpath, err))
 		}
-		result, _ := vm.ToValue(true)
+		result, _ := js.VM.ToValue(true)
 		return result
 	})
 
+	js.SetHelp("os", "remove", []string{"filepath string"}, "Removes the file indicated by filepath")
 	// os.remove(filepath) returns an error object or true if successful
 	osObj.Set("remove", func(call otto.FunctionCall) otto.Value {
 		pathname := call.Argument(0).String()
@@ -199,17 +300,18 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.remove(%q), %s", call.CallerLocation(), pathname, err))
 		}
-		result, _ := vm.ToValue(false)
+		result, _ := js.VM.ToValue(false)
 		if stat.IsDir() == false {
 			err := os.Remove(pathname)
 			if err != nil {
 				return errorObject(nil, fmt.Sprintf("%s os.remove(%q), %s", call.CallerLocation(), pathname, err))
 			}
-			result, _ = vm.ToValue(true)
+			result, _ = js.VM.ToValue(true)
 		}
 		return result
 	})
 
+	js.SetHelp("os", "chmod", []string{"filepath string", "perms numeric"}, "Sets the permissions for a file (e.g. 0775, 0664)")
 	// os.chmod(filepath, perms) returns an error object or true if successful
 	osObj.Set("chmod", func(call otto.FunctionCall) otto.Value {
 		filename := call.Argument(0).String()
@@ -229,10 +331,11 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.chmod(%q, %s), %s", call.CallerLocation(), filename, perms, err))
 		}
-		result, _ := vm.ToValue(true)
+		result, _ := js.VM.ToValue(true)
 		return result
 	})
 
+	js.SetHelp("os", "find", []string{"startpath string"}, "Looks for a files in startpath")
 	// os.find(startpath) returns an array of path names
 	osObj.Set("find", func(call otto.FunctionCall) otto.Value {
 		var dirs []string
@@ -244,13 +347,14 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.find(%q), %s", call.CallerLocation(), startpath, err))
 		}
-		result, err := vm.ToValue(dirs)
+		result, err := js.VM.ToValue(dirs)
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.find(%q), %s", call.CallerLocation(), startpath, err))
 		}
 		return result
 	})
 
+	js.SetHelp("os", "mkdir", []string{"pathname string", "perms numeric"}, "Makes a directory with the permissions (e.g. 0775)")
 	// os.mkdir(pathname, perms) return an error object or true
 	osObj.Set("mkdir", func(call otto.FunctionCall) otto.Value {
 		newpath := call.Argument(0).String()
@@ -265,10 +369,11 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 			return errorObject(nil, fmt.Sprintf("%s os.mkdir(%q, %s), %s", call.CallerLocation(), newpath, perms, err))
 		}
 
-		result, _ := vm.ToValue(true)
+		result, _ := js.VM.ToValue(true)
 		return result
 	})
 
+	js.SetHelp("os", "mkdirAll", []string{"pathname string", "perms numeric"}, "Makes a directory including missing ones in the path. E.g mkdir -p in Unix shell")
 	// os.mkdir(pathname, perms) return an error object or true
 	osObj.Set("mkdirAll", func(call otto.FunctionCall) otto.Value {
 		newpath := call.Argument(0).String()
@@ -283,10 +388,11 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 			return errorObject(nil, fmt.Sprintf("%s os.mkdir(%q, %s), %s", call.CallerLocation(), newpath, perms, err))
 		}
 
-		result, _ := vm.ToValue(true)
+		result, _ := js.VM.ToValue(true)
 		return result
 	})
 
+	js.SetHelp("os", "rmdir", []string{"pathname string"}, "Removes the directory specified with pathname")
 	// os.rmdir(pathname) returns an error object or true if successful
 	osObj.Set("rmdir", func(call otto.FunctionCall) otto.Value {
 		pathname := call.Argument(0).String()
@@ -300,17 +406,18 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.rmdir(%q), %s", call.CallerLocation(), pathname, err))
 		}
-		result, _ := vm.ToValue(false)
+		result, _ := js.VM.ToValue(false)
 		if stat.IsDir() == true {
 			err := os.Remove(pathname)
 			if err != nil {
 				return errorObject(nil, fmt.Sprintf("%s os.rmdir(%q), %s", call.CallerLocation(), pathname, err))
 			}
-			result, _ = vm.ToValue(true)
+			result, _ = js.VM.ToValue(true)
 		}
 		return result
 	})
 
+	js.SetHelp("os", "rmdirAll", []string{"pathname string"}, "Removes a directory and any included in pathname")
 	// os.rmdirAll(pathname) returns an error object or true if successful
 	osObj.Set("rmdirAll", func(call otto.FunctionCall) otto.Value {
 		pathname := call.Argument(0).String()
@@ -324,19 +431,21 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.rmdirAll(%q), %s", call.CallerLocation(), pathname, err))
 		}
-		result, _ := vm.ToValue(false)
+		result, _ := js.VM.ToValue(false)
 		if stat.IsDir() == true {
 			err := os.RemoveAll(pathname)
 			if err != nil {
 				return errorObject(nil, fmt.Sprintf("%s os.rmdirAll(%q), %s", call.CallerLocation(), pathname, err))
 			}
-			result, _ = vm.ToValue(true)
+			result, _ = js.VM.ToValue(true)
 		}
 		return result
 	})
 
-	httpObj, _ := vm.Object(`http = {}`)
+	js.SetHelp("http", "-", []string{}, "The http object provides synchronous GET and POST methods")
+	httpObj, _ := js.VM.Object(`http = {}`)
 
+	js.SetHelp("http", "get", []string{"uri string", "headers []object"}, "performs a synchronous http GET operation")
 	// http.Get(uri, headers) returns contents recieved (if any)
 	httpObj.Set("get", func(call otto.FunctionCall) otto.Value {
 		var headers []map[string]string
@@ -371,13 +480,14 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		defer resp.Body.Close()
 		content, err := ioutil.ReadAll(resp.Body)
 
-		result, err := vm.ToValue(fmt.Sprintf("%s", content))
+		result, err := js.VM.ToValue(fmt.Sprintf("%s", content))
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("http.get(%q, headers) error, %s, %s", uri, call.CallerLocation(), err))
 		}
 		return result
 	})
 
+	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
 	// HttpPost(uri, headers, payload) returns contents recieved (if any)
 	httpObj.Set("post", func(call otto.FunctionCall) otto.Value {
 		var headers []map[string]string
@@ -419,44 +529,25 @@ func AddExtensions(vm *otto.Otto) *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("Can't read response %s, %s, %s", uri, call.CallerLocation(), err))
 		}
-		result, err := vm.ToValue(fmt.Sprintf("%s", content))
+		result, err := js.VM.ToValue(fmt.Sprintf("%s", content))
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("http.post(%q, headers, payload) error, %s, %s", uri, call.CallerLocation(), err))
 		}
 		return result
 	})
 
-	script, err := vm.Compile("polyfill", Polyfill)
+	script, err := js.VM.Compile("polyfill", Polyfill)
 	if err != nil {
 		log.Fatalf("polyfill compile error: %s\n\n%s\n", err, Polyfill)
 	}
-	vm.Eval(script)
-	return vm
+	js.VM.Eval(script)
+	return js.VM
 }
 
 // Provide a Repl for working with IxIF content via JavaScript
 // args holds the command line parameters passed to the repl for processing by a script in interactively in the repl.
 // Returns an integer value suitable to pass to os.Exit().
-func Repl(vm *otto.Otto) {
-	autoCompleter := readline.NewPrefixCompleter(
-		// Autocomplete for os object
-		readline.PcItem("os.args()"),
-		readline.PcItem("os.exit(exitCode)"),
-		readline.PcItem("os.getEnv(envvar)"),
-		readline.PcItem("os.readFile(filename)"),
-		readline.PcItem("os.writeFile(filename, data)"),
-		readline.PcItem("os.rename(oldname, newname)"),
-		readline.PcItem("os.remove(filename)"),
-		readline.PcItem("os.chmod(filename, perms)"),
-		readline.PcItem("os.find(filename)"),
-		readline.PcItem("os.mkdir(dirname)"),
-		readline.PcItem("os.mkdirAll(dirpath)"),
-		readline.PcItem("os.rmdir(dirname)"),
-		readline.PcItem("os.rmdirAll(dirpath)"),
-		// Autocompleter for http object
-		readline.PcItem("http.get(url, headers)"),
-		readline.PcItem("http.post(url, headers, payload)"),
-	)
+func (js *JavaScriptVM) Repl() {
 
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
@@ -465,7 +556,9 @@ func Repl(vm *otto.Otto) {
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:       "> ",
 		HistoryFile:  path.Join(homeDir, ".ottomatic_history"),
-		AutoComplete: autoCompleter,
+		AutoComplete: js.AutoCompleter,
+		// for multi-line support see https://github.com/chzyer/readline/blob/master/example/readline-multiline/readline-multiline.go
+		//DisableAutoSaveHistory: true,
 	})
 	if err != nil {
 		panic(err)
@@ -477,8 +570,8 @@ func Repl(vm *otto.Otto) {
 		if err != nil { // io.EOF, readline.ErrInterrupt
 			break
 		}
-		script, _ := vm.Compile(fmt.Sprintf("command %d", i), line)
-		vm.Eval(script)
+		script, _ := js.VM.Compile(fmt.Sprintf("command %d", i), line)
+		js.VM.Eval(script)
 	}
 }
 
