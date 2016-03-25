@@ -21,6 +21,7 @@ package ostdlib
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -43,6 +44,12 @@ const Version = "0.0.0"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
+    if (show === undefined) {
+		function show(obj) { 
+			console.log(JSON.stringify(obj, null, "  ")); 
+			return "" 
+		}
+	}
 	if (!Date.prototype.now) {
 		Date.prototype.now = function now() {
 			'use strict';
@@ -96,18 +103,19 @@ var Polyfill = `
 
 // HelpMsg supports storing interactive help content
 type HelpMsg struct {
-	Object   string
-	Function string
-	Params   []string
-	Msg      string
+	XMLName  xml.Name `xml:"HelpMsg" json:"-"`
+	Object   string   `xml:"object" json:"object"`
+	Function string   `xml:"function" json:"function"`
+	Params   []string `xml:"parameters" json:"parameters"`
+	Msg      string   `xml:"docstring" json:"docstring"`
 }
 
 // JavaScriptVM is a wrapper for *otto.Otto to make it easy to add features without forking Otto.
 type JavaScriptVM struct {
 	VM                *otto.Otto
 	AutoCompleter     *readline.PrefixCompleter
-	AutoCompleteTerms []string
-	Help              map[string][]*HelpMsg
+	AutoCompleteTerms []string              `xml:"autocomplete_terms" json:"autocomplete_terms"`
+	Help              map[string][]*HelpMsg `xml:"help" json:"help"`
 }
 
 // New create a new JavaScriptVM structure extending the functionality of *otto.Otto
@@ -189,7 +197,7 @@ func (js *JavaScriptVM) SetupAutoComplete() {
 // AddHelp adds the interactive help based on the extensions defined in ostdlib
 func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("os", "args", []string{}, "Exposes any command line arguments left after flag.Parse() has run.")
-	js.SetHelp("os", "exit", []string{"exitCode int"}, "Stops the program existing with the numeric value given(e.g. zero if everything is OK)")
+	js.SetHelp("os", "exit", []string{"exitCode int, log_msg string"}, "Stops the program existing with the numeric value given(e.g. zero if everything is OK), an optional log message can be included.")
 	js.SetHelp("os", "getEnv", []string{"envvar string"}, `Gets the environment variable matching the structing. (e.g. os.getEnv(\"HOME\")`)
 	js.SetHelp("os", "readFile", []string{"filepath"}, "Reads the filename provided and returns the results as a JavaScript string")
 	js.SetHelp("os", "writeFile", []string{"filepath string", "content string"}, "Writes a file, parameters are filepath and contents which are both strings")
@@ -244,6 +252,23 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		return obj.Value()
 	}
 
+	js.VM.Set("quit", func(call otto.FunctionCall) otto.Value {
+		exitCode := 0
+		if len(call.ArgumentList) >= 1 {
+			s := call.Argument(0).String()
+			i, err := strconv.Atoi(s)
+			if err != nil {
+				log.Fatalf("quit(exit_code, msg) error, %s, %s", err, call.CallerLocation())
+			}
+			exitCode = i
+		}
+		if len(call.ArgumentList) == 2 {
+			log.Println(call.Argument(1).String())
+		}
+		os.Exit(exitCode)
+		return responseObject(exitCode)
+	})
+
 	osObj, _ := js.VM.Object(`os = {}`)
 
 	// os.args() returns an array of command line args after flag.Parse() has occurred.
@@ -261,9 +286,12 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	// os.exit()
 	osObj.Set("exit", func(call otto.FunctionCall) otto.Value {
 		exitCode := 0
-		if len(call.ArgumentList) == 1 {
+		if len(call.ArgumentList) >= 1 {
 			s := call.Argument(0).String()
 			exitCode, _ = strconv.Atoi(s)
+		}
+		if len(call.ArgumentList) == 2 {
+			log.Println(call.Argument(1).String())
 		}
 		os.Exit(exitCode)
 		return responseObject(exitCode)
@@ -684,20 +712,40 @@ func (js *JavaScriptVM) Repl() {
 		HistoryFile:  path.Join(homeDir, ".ottomatic_history"),
 		AutoComplete: js.AutoCompleter,
 		// for multi-line support see https://github.com/chzyer/readline/blob/master/example/readline-multiline/readline-multiline.go
-		//DisableAutoSaveHistory: true,
+		DisableAutoSaveHistory: true,
 	})
 	if err != nil {
 		panic(err)
 	}
 	defer rl.Close()
 
+	var cmds []string
 	for i := 1; true; i++ {
 		line, err := rl.Readline()
 		if err != nil { // io.EOF, readline.ErrInterrupt
 			break
 		}
-		script, _ := js.VM.Compile(fmt.Sprintf("command %d", i), line)
-		js.VM.Eval(script)
+		if line == ".break" {
+			fmt.Printf("Clearing input %q\n", strings.Join(cmds, " "))
+			cmds = []string{}
+			rl.SetPrompt("> ")
+		} else {
+			cmds = append(cmds, line)
+			script, err := js.VM.Compile(fmt.Sprintf("command %d", i), strings.Join(cmds, " "))
+			if err != nil {
+				fmt.Printf("%s\n", err)
+				rl.SetPrompt(fmt.Sprintf("%0.2d: ", len(cmds)))
+			} else {
+				rl.SetPrompt("> ")
+				rl.SaveHistory(strings.Join(cmds, " "))
+				cmds = []string{}
+				val, err := js.VM.Eval(script)
+				if err != nil {
+					fmt.Printf("js error: %s\n", err)
+				}
+				fmt.Println(val.String())
+			}
+		}
 	}
 }
 
