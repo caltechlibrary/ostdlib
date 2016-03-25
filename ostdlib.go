@@ -35,6 +35,7 @@ import (
 	// 3rd Party packages
 	"github.com/chzyer/readline"
 	"github.com/robertkrimen/otto"
+	"github.com/tealeg/xlsx"
 )
 
 // Version of the Otto Standard Library
@@ -202,6 +203,8 @@ func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("os", "rmdirAll", []string{"pathname string"}, "Removes a directory and any included in pathname")
 	js.SetHelp("http", "get", []string{"uri string", "headers []object"}, "performs a synchronous http GET operation")
 	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
+	js.SetHelp("xlsx", "read", []string{"filename string"}, "Reads in an Excel xlsx workbook file and returns an object contains the sheets found or error object")
+	js.SetHelp("xlsx", "write", []string{"filename string, sheetObject object"}, "Write an Excel xlsx workbook file and returns true on success or error object")
 	js.VM.Set("help", func(call otto.FunctionCall) otto.Value {
 		objectName := ""
 		functionName := ""
@@ -552,6 +555,94 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		result, err := js.VM.ToValue(fmt.Sprintf("%s", content))
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("http.post(%q, headers, payload) error, %s, %s", uri, call.CallerLocation(), err))
+		}
+		return result
+	})
+
+	// workbook wraps github.com/tealeg/xlsx library making it easy to read/write Excel xlsx files from Otto
+	workbook, _ := js.VM.Object(`xlsx = {}`)
+	// Workbook.read(filename) returns an object with properties of sheet names pointing at 2d-arrays of strings or error object
+	workbook.Set("read", func(call otto.FunctionCall) otto.Value {
+		if len(call.ArgumentList) != 1 {
+			return errorObject(nil, fmt.Sprintf("xlxs.read(filename), error missing filename, %s", call.CallerLocation()))
+		}
+		fname := call.Argument(0).String()
+		xlWorkbook, err := xlsx.OpenFile(fname)
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("xlsx.read(%q), error %s, %s", fname, call.CallerLocation(), err))
+		}
+		var markup []string
+
+		// Start Workbook object markup
+		markup = append(markup, fmt.Sprintf("{"))
+		for i, sheet := range xlWorkbook.Sheets {
+			if i > 0 {
+				markup = append(markup, fmt.Sprintf(","))
+			}
+			// Start a sheet with sheetNameString
+			markup = append(markup, fmt.Sprintf("%q:[", sheet.Name))
+			for j, row := range sheet.Rows {
+				if j > 0 {
+					markup = append(markup, fmt.Sprintf(","))
+				}
+				// Start Row of cells
+				markup = append(markup, fmt.Sprintf("["))
+				for k, cell := range row.Cells {
+					if k > 0 {
+						markup = append(markup, fmt.Sprintf(","))
+					}
+					//NOTE: could use cell.Type() to convert to JS formatted values instead of forcing to a string
+					markup = append(markup, fmt.Sprintf("%q", cell.String()))
+				}
+				// Close Row of cells
+				markup = append(markup, fmt.Sprintf("]"))
+			}
+			// Close a sheet
+			markup = append(markup, fmt.Sprintf("]"))
+		}
+		// End Workbook object markup
+		markup = append(markup, fmt.Sprintf("}"))
+		result, err := js.VM.Eval(fmt.Sprintf("(function (){ return %s;}());", strings.Join(markup, "")))
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("Workbook.read(%q) error, %s, %s", fname, call.CallerLocation(), err))
+		}
+		return result
+	})
+
+	// Workbook.write(filename, sheetObject) returns true on success, false otherwise. sheetObject should have properties of sheet names pointing at a 2d array of strings
+	workbook.Set("write", func(call otto.FunctionCall) otto.Value {
+		if len(call.ArgumentList) != 2 {
+			return errorObject(nil, fmt.Sprintf("Workbook.write(filename, sheetsObject), missing parameters, %s", call.CallerLocation()))
+		}
+		fname := call.Argument(0).String()
+		data, err := call.Argument(1).Export()
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("Workbook.write(%q, sheetsObject), error %s, %s", fname, call.CallerLocation(), err))
+		}
+		var file *xlsx.File
+
+		file = xlsx.NewFile()
+		for sheetName, table := range data.(map[string]interface{}) {
+			sheet, err := file.AddSheet(sheetName)
+			if err != nil {
+				log.Printf("%s, can't add sheet %s, %s", fname, sheetName, err)
+			} else {
+				for _, tr := range table.([][]string) {
+					row := sheet.AddRow()
+					for _, td := range tr {
+						cell := row.AddCell()
+						cell.Value = td
+					}
+				}
+			}
+		}
+		err = file.Save(fname)
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("Workbook.write(%q, sheetsObject), error %s, %s", fname, call.CallerLocation(), err))
+		}
+		result, err := js.VM.ToValue(true)
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("Workbook.write(%q, sheetsObject) error, %s, %s", fname, call.CallerLocation(), err))
 		}
 		return result
 	})

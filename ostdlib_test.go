@@ -99,3 +99,77 @@ func TestHelpSystem(t *testing.T) {
 	// src, _ = json.MarshalIndent(js.AutoCompleter, "", "\t")
 	// fmt.Printf("DEBUG js.AutoCompleter: %s\n", src)
 }
+
+func TestWorkbookRead(t *testing.T) {
+	vm := otto.New()
+	js := New(vm)
+	js.AddExtensions()
+	// Check to see if we have a workbook with two sheets
+	val, err := js.VM.Eval(`
+		(function () {
+			var wk = xlsx.read("testdata/Workbook1.xlsx");
+			if (typeof wk !== "object") {
+				console.log("Workbook type of object, ", typeof wk);
+				return false;
+			}
+			var keys = Object.keys(wk);
+			if (typeof keys !== "object" && typeof keys !== "array") {
+				console.log("keys type of object or array, ", typeof keys);
+				return false;
+			}
+			if (keys.length !== 2) {
+				console.log("Expected two worksheets in testdata/Workbook1.xlsx, ", keys.length);
+				return false;
+			}
+			if (keys[0] !== "Sheet1") {
+				console.log("Expected sheet zero to be named Sheet1 ", keys[0]);
+				return false;
+			}
+			if (keys[1] !== "Sheet2") {
+				console.log("Expected sheet one to be named Sheet2 ", keys[1]);
+				return false;
+			}
+			return true;
+		}());
+	`)
+	if err != nil {
+		t.Errorf("xlsx.read() failed, %s", err)
+	} else {
+		testResult, err := val.ToBoolean()
+		if err != nil {
+			t.Errorf("xlsx.read(), can't read sheet count, %s", err)
+		}
+		if testResult == false {
+			t.FailNow()
+		}
+	}
+}
+
+func TestWorkbookWrite(t *testing.T) {
+	vm := otto.New()
+	js := New(vm)
+	js.AddExtensions()
+	// Check to see if we have a workbook with two sheets
+	val, err := js.VM.Eval(`
+		(function () {
+			var wk = xlsx.read("testdata/Workbook1.xlsx");
+			var result = false;
+			result = xlsx.write("testout.xlsx", wk);
+			if (result !== true) {
+				console.log("Could not write ", JSON.Stringify(wk), JSON.Stringify(result, null, "  "));
+			}
+			return result;
+		}());
+	`)
+	if err != nil {
+		t.Errorf("xlsx.read() failed, %s", err)
+	} else {
+		testResult, err := val.ToBoolean()
+		if err != nil {
+			t.Errorf("xlsx.read(), can't read sheet count, %s", err)
+		}
+		if testResult == false {
+			t.FailNow()
+		}
+	}
+}

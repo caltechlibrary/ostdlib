@@ -26,3 +26,4 @@ _testmain.go
 # Local excluded bits
 ottomatic
 bin/*
+testout.xlsx
