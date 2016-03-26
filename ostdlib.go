@@ -184,7 +184,8 @@ func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
 	return
 }
 
-func (js *JavaScriptVM) SetupAutoComplete() {
+// AddAutoComplete() populates the auto completion based on the help data structure
+func (js *JavaScriptVM) AddAutoComplete() {
 	completer := readline.NewPrefixCompleter(readline.PcItem("help()"))
 	children := completer.GetChildren()
 	for _, text := range js.AutoCompleteTerms {
@@ -620,7 +621,8 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 						markup = append(markup, fmt.Sprintf(","))
 					}
 					//NOTE: could use cell.Type() to convert to JS formatted values instead of forcing to a string
-					markup = append(markup, fmt.Sprintf("%q", cell.String()))
+					s, _ := cell.String()
+					markup = append(markup, fmt.Sprintf("%q", s))
 				}
 				// Close Row of cells
 				markup = append(markup, fmt.Sprintf("]"))
