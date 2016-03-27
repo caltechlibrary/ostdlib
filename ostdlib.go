@@ -35,6 +35,7 @@ import (
 
 	// 3rd Party packages
 	"github.com/chzyer/readline"
+	"github.com/fatih/color"
 	"github.com/robertkrimen/otto"
 	"github.com/tealeg/xlsx"
 )
@@ -116,6 +117,25 @@ type JavaScriptVM struct {
 	AutoCompleter     *readline.PrefixCompleter
 	AutoCompleteTerms []string              `xml:"autocomplete_terms" json:"autocomplete_terms"`
 	Help              map[string][]*HelpMsg `xml:"help" json:"help"`
+}
+
+// AddWelcomeMessage display default weclome message based on
+// JavaScriptVM.HelpMsg
+func (js *JavaScriptVM) PrintDefaultWelcome() {
+	bold := color.New(color.Bold).SprintFunc()
+	appName := path.Base(os.Args[0])
+	fmt.Printf(" Welcome to %s\n", bold(appName))
+	fmt.Println(" Use help() for information about built in objects")
+	fmt.Println(`     E.g. help("os");`)
+	fmt.Println(" Help is available for the following objects.")
+	for k, _ := range js.Help {
+		fmt.Printf("\t%q", k)
+	}
+	fmt.Println("")
+	if js.AutoCompleter != nil {
+		fmt.Println(" Press tab for auto completion")
+	}
+	fmt.Printf(" Version %s\n", Version)
 }
 
 // New create a new JavaScriptVM structure extending the functionality of *otto.Otto
@@ -705,6 +725,8 @@ func (js *JavaScriptVM) Runner(filenames []string) {
 
 // Repl provides interactive JavaScript shell supporting autocomplete and command history
 func (js *JavaScriptVM) Repl() {
+	bold := color.New(color.Bold).SprintFunc()
+
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		homeDir, _ = filepath.Abs(".")
@@ -745,7 +767,7 @@ func (js *JavaScriptVM) Repl() {
 				if err != nil {
 					fmt.Printf("js error: %s\n", err)
 				}
-				fmt.Println(val.String())
+				fmt.Printf("    %s\n", bold(val.String()))
 			}
 		}
 	}
