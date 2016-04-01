@@ -299,7 +299,7 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	osObj.Set("setEnv", func(call otto.FunctionCall) otto.Value {
 		envvar := call.Argument(0).String()
 		val := call.Argument(1).String()
-		err := os.Setenv(envar, val)
+		err := os.Setenv(envvar, val)
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.setEnv(%q, %q), %s", call.CallerLocation(), envvar, val, err))
 		}
