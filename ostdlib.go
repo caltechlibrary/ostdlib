@@ -46,9 +46,9 @@ const Version = "0.0.0"
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
     if (show === undefined) {
-		function show(obj) { 
-			console.log(JSON.stringify(obj, null, "  ")); 
-			return "" 
+		function show(obj) {
+			console.log(JSON.stringify(obj, null, "  "));
+			return ""
 		}
 	}
 	if (!Date.prototype.now) {
@@ -749,11 +749,28 @@ func (js *JavaScriptVM) Repl() {
 		if err != nil { // io.EOF, readline.ErrInterrupt
 			break
 		}
-		if line == ".break" {
+		switch {
+		case strings.HasPrefix(line, ".help"):
+			topic := strings.TrimPrefix(line, ".help ")
+			if topic == "" {
+				js.GetHelp("", "")
+			} else {
+				dotPosition := strings.Index(topic, ".")
+				if dotPosition > -1 && dotPosition <= len(topic) {
+					o := topic[0:dotPosition]
+					f := topic[dotPosition+1:]
+					js.GetHelp(o, f)
+				} else {
+					js.GetHelp(topic, "")
+				}
+			}
+		case strings.HasPrefix(line, ".quit"):
+			os.Exit(0)
+		case line == ".break":
 			fmt.Printf("Clearing input %q\n", strings.Join(cmds, " "))
 			cmds = []string{}
 			rl.SetPrompt("> ")
-		} else {
+		default:
 			cmds = append(cmds, line)
 			script, err := js.VM.Compile(fmt.Sprintf("command %d", i), strings.Join(cmds, " "))
 			if err != nil {

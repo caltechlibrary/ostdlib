@@ -60,7 +60,7 @@ func main() {
 	// Add extension help
 	js.AddHelp()
 	// Add autocomplete based on current state of js.Help
-	js.SetupAutoComplete()
+	js.AddAutoComplete()
 
 	args := flag.Args()
 	if len(args) == 0 {
