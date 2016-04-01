@@ -41,7 +41,7 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.1"
+const Version = "0.0.2"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
@@ -205,8 +205,11 @@ func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
 
 // AddAutoComplete() populates the auto completion based on the help data structure
 func (js *JavaScriptVM) AddAutoComplete() {
-	completer := readline.NewPrefixCompleter(readline.PcItem("help()"))
+	completer := readline.NewPrefixCompleter()
 	children := completer.GetChildren()
+	children = append(children, readline.PcItem(".break"))
+	children = append(children, readline.PcItem(".help"))
+	children = append(children, readline.PcItem(".quit"))
 	for _, text := range js.AutoCompleteTerms {
 		children = append(children, readline.PcItem(text))
 	}
@@ -233,25 +236,6 @@ func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
 	js.SetHelp("xlsx", "read", []string{"filename string"}, "Reads in an Excel xlsx workbook file and returns an object contains the sheets found or error object")
 	js.SetHelp("xlsx", "write", []string{"filename string, sheetObject object"}, "Write an Excel xlsx workbook file and returns true on success or error object")
-	js.VM.Set("help", func(call otto.FunctionCall) otto.Value {
-		objectName := ""
-		functionName := ""
-		if len(call.ArgumentList) > 0 {
-			s := call.Argument(0).String()
-			if pos := strings.Index(s, "("); pos > -1 {
-				s = s[0:pos]
-			}
-			p := strings.Split(s, ".")
-			if len(p) == 1 {
-				objectName = p[0]
-			}
-			if len(p) == 2 {
-				objectName, functionName = p[0], p[1]
-			}
-		}
-		js.GetHelp(objectName, functionName)
-		return otto.Value{}
-	})
 }
 
 // AddExtensions takes an exisitng *otto.Otto (JavaScript VM) and adds os and http objects wrapping some Go native packages
@@ -271,23 +255,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		obj, _ := js.VM.Object(fmt.Sprintf(`(%s)`, src))
 		return obj.Value()
 	}
-
-	js.VM.Set("quit", func(call otto.FunctionCall) otto.Value {
-		exitCode := 0
-		if len(call.ArgumentList) >= 1 {
-			s := call.Argument(0).String()
-			i, err := strconv.Atoi(s)
-			if err != nil {
-				log.Fatalf("quit(exit_code, msg) error, %s, %s", err, call.CallerLocation())
-			}
-			exitCode = i
-		}
-		if len(call.ArgumentList) == 2 {
-			log.Println(call.Argument(1).String())
-		}
-		os.Exit(exitCode)
-		return responseObject(exitCode)
-	})
 
 	osObj, _ := js.VM.Object(`os = {}`)
 
