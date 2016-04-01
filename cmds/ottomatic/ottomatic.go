@@ -61,6 +61,8 @@ func main() {
 	js.AddHelp()
 	// Add autocomplete based on current state of js.Help
 	js.AddAutoComplete()
+	// Print Default Welcome message
+	js.PrintDefaultWelcome()
 
 	args := flag.Args()
 	if len(args) == 0 {

@@ -41,7 +41,7 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.0"
+const Version = "0.0.1"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
@@ -124,19 +124,17 @@ type JavaScriptVM struct {
 func (js *JavaScriptVM) PrintDefaultWelcome() {
 	bold := color.New(color.Bold).SprintFunc()
 	appName := path.Base(os.Args[0])
-	fmt.Printf(" Welcome to %s\n", bold(appName))
-	fmt.Println(" Use .quit to exit the shell")
-	fmt.Println(" Use .help for information about built-in objects")
-	fmt.Println("     E.g. .help os")
+	fmt.Printf(" Welcome to %s\n\n", bold(appName))
+	fmt.Printf(" Type %s to exit or %s for help information\n (e.g. %s or %s)\n\n", bold(".quit"), bold(".help"), bold(".help os"), bold(".help os.exit"))
 	fmt.Println(" Help is available for the following objects.")
 	for k, _ := range js.Help {
-		fmt.Printf("\t%q", k)
+		fmt.Printf("\t%s", bold(k))
 	}
 	fmt.Println("")
 	if js.AutoCompleter != nil {
 		fmt.Println(" Press tab for auto completion")
 	}
-	fmt.Printf(" Version %s\n", Version)
+	fmt.Printf(" repl version %s\n\n", Version)
 }
 
 // New create a new JavaScriptVM structure extending the functionality of *otto.Otto
