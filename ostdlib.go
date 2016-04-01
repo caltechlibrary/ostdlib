@@ -125,8 +125,9 @@ func (js *JavaScriptVM) PrintDefaultWelcome() {
 	bold := color.New(color.Bold).SprintFunc()
 	appName := path.Base(os.Args[0])
 	fmt.Printf(" Welcome to %s\n", bold(appName))
-	fmt.Println(" Use help() for information about built in objects")
-	fmt.Println(`     E.g. help("os");`)
+	fmt.Println(" Use .quit to exit the shell")
+	fmt.Println(" Use .help for information about built-in objects")
+	fmt.Println("     E.g. .help os")
 	fmt.Println(" Help is available for the following objects.")
 	for k, _ := range js.Help {
 		fmt.Printf("\t%q", k)
