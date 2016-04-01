@@ -222,6 +222,7 @@ func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("os", "args", []string{}, "Exposes any command line arguments left after flag.Parse() has run.")
 	js.SetHelp("os", "exit", []string{"exitCode int, log_msg string"}, "Stops the program existing with the numeric value given(e.g. zero if everything is OK), an optional log message can be included.")
 	js.SetHelp("os", "getEnv", []string{"envvar string"}, `Gets the environment variable matching the structing. (e.g. os.getEnv(\"HOME\")`)
+	js.SetHelp("os", "setEnv", []string{"envvar string"}, `Sets the environment variable. (e.g. os.setEnv(\"Welcome\", \"Hi there\")`)
 	js.SetHelp("os", "readFile", []string{"filepath"}, "Reads the filename provided and returns the results as a JavaScript string")
 	js.SetHelp("os", "writeFile", []string{"filepath string", "content string"}, "Writes a file, parameters are filepath and contents which are both strings")
 	js.SetHelp("os", "rename", []string{"oldpath string", "newpath string"}, "Renames oldpath to newpath")
@@ -290,6 +291,21 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		result, err := js.VM.ToValue(os.Getenv(envvar))
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.getEnv(%q), %s", call.CallerLocation(), envvar, err))
+		}
+		return result
+	})
+
+	// os.setEnv(env_varname, value) sets the environment variable for the session, returns the value set.
+	osObj.Set("setEnv", func(call otto.FunctionCall) otto.Value {
+		envvar := call.Argument(0).String()
+		val := call.Argument(1).String()
+		err := os.Setenv(envar, val)
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("%s os.setEnv(%q, %q), %s", call.CallerLocation(), envvar, val, err))
+		}
+		result, err := js.VM.ToValue(os.Getenv(envvar))
+		if err != nil {
+			return errorObject(nil, fmt.Sprintf("%s os.setEnv(%q, %q), %s", call.CallerLocation(), envvar, val, err))
 		}
 		return result
 	})
