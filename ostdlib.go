@@ -42,7 +42,7 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.4"
+const Version = "0.0.5"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
@@ -726,9 +726,10 @@ func (js *JavaScriptVM) Repl() {
 	if homeDir == "" {
 		homeDir, _ = filepath.Abs(".")
 	}
+	historyFileName := fmt.Sprintf(".%s_history", path.Base(os.Args[0]))
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:       "> ",
-		HistoryFile:  path.Join(homeDir, ".ottomatic_history"),
+		HistoryFile:  path.Join(homeDir, historyFileName),
 		AutoComplete: js.AutoCompleter,
 		// for multi-line support see https://github.com/chzyer/readline/blob/master/example/readline-multiline/readline-multiline.go
 		DisableAutoSaveHistory: true,
