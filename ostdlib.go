@@ -41,7 +41,7 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.2"
+const Version = "0.0.3"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
@@ -125,7 +125,7 @@ func (js *JavaScriptVM) PrintDefaultWelcome() {
 	bold := color.New(color.Bold).SprintFunc()
 	appName := path.Base(os.Args[0])
 	fmt.Printf(" Welcome to %s\n\n", bold(appName))
-	fmt.Printf(" Type %s to exit or %s for help information\n (e.g. %s or %s)\n\n", bold(".quit"), bold(".help"), bold(".help os"), bold(".help os.exit"))
+	fmt.Printf(" Type %s to exit or %s for help information\n (e.g. %s or %s)\n\n", bold(".exit"), bold(".help"), bold(".help os"), bold(".help os.exit"))
 	fmt.Println(" Help is available for the following objects.")
 	for k, _ := range js.Help {
 		fmt.Printf("\t%s", bold(k))
@@ -178,13 +178,21 @@ func (js *JavaScriptVM) SetHelp(objectName string, functionName string, params [
 
 // GetHelp retrieves help text by object and function names
 func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
+	bold := color.New(color.Bold).SprintFunc()
 	if objectName == "" {
 		s := []string{"help provides information about objects and functions"}
 		for ky := range js.Help {
 			s = append(s, ky)
 		}
 		fmt.Printf("%s\n", strings.Join(s, "\n   "))
-		// return fmt.Sprintf("%s\n", strings.Join(s, "\n  "))
+		fmt.Println("Additionally the repl provide the following dot commands")
+		fmt.Printf(" %s\tshow help\n", bold(".help"))
+		fmt.Printf(" %s\tbreak out multi-line entry without saving command\n", bold(".break"))
+		fmt.Printf(" %s\texit repl\n", bold(".exit"))
+		fmt.Printf(" %s\tlist history\n", bold(".list"))
+		fmt.Printf(" %s FILENAME\tload history from FILENAME\n", bold(".load"))
+		fmt.Printf(" %s\ttrunctate history\n", bold(".reset"))
+		fmt.Printf(" %s FILENAME\tsave history to FILENAME\n", bold(".save"))
 		return
 	}
 	s := []string{fmt.Sprintf("%s", objectName)}
@@ -207,9 +215,13 @@ func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
 func (js *JavaScriptVM) AddAutoComplete() {
 	completer := readline.NewPrefixCompleter()
 	children := completer.GetChildren()
-	children = append(children, readline.PcItem(".break"))
 	children = append(children, readline.PcItem(".help"))
-	children = append(children, readline.PcItem(".quit"))
+	children = append(children, readline.PcItem(".break"))
+	children = append(children, readline.PcItem(".exit"))
+	children = append(children, readline.PcItem(".list"))
+	children = append(children, readline.PcItem(".load"))
+	children = append(children, readline.PcItem(".reset"))
+	children = append(children, readline.PcItem(".save"))
 	for _, text := range js.AutoCompleteTerms {
 		children = append(children, readline.PcItem(text))
 	}
@@ -746,7 +758,58 @@ func (js *JavaScriptVM) Repl() {
 					js.GetHelp(topic, "")
 				}
 			}
-		case strings.HasPrefix(line, ".quit"):
+		case strings.HasPrefix(line, ".list"):
+			buf, err := ioutil.ReadFile(rl.Config.HistoryFile)
+			if err != nil {
+				fmt.Println("History is readable, %s\n", err)
+				break
+			}
+			fmt.Printf("%s", buf)
+		case strings.HasPrefix(line, ".load"):
+			s := strings.SplitN(line, " ", 2)
+			if len(s) < 2 || s[1] == "" {
+				js.GetHelp("", "")
+				break
+			}
+			buf, err := ioutil.ReadFile(s[1])
+			if err != nil {
+				fmt.Println("History is readable, %s\n", err)
+				break
+			}
+			// Now append to current history file
+			fp, err := os.OpenFile(rl.Config.HistoryFile, os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				fmt.Printf("Can't append history, %s", err)
+			}
+			if _, err := fp.WriteString(fmt.Sprintf("%s", buf)); err != nil {
+				fmt.Printf("Can't append history, %s", err)
+			}
+			fp.Close()
+			fmt.Printf("%s loaded\n", s[1])
+		case strings.HasPrefix(line, ".reset"):
+			err := os.Truncate(rl.Config.HistoryFile, 0)
+			if err != nil {
+				fmt.Printf("Could not truncate history, %s\n", err)
+				break
+			}
+			fmt.Println("history truncated")
+		case strings.HasPrefix(line, ".save"):
+			buf, err := ioutil.ReadFile(rl.Config.HistoryFile)
+			if err != nil {
+				fmt.Println("History is readable, %s\n", err)
+				break
+			}
+			s := strings.SplitN(line, " ", 2)
+			if len(s) != 2 || s[1] == "" {
+				js.GetHelp("", "")
+				break
+			}
+			if err := ioutil.WriteFile(s[1], buf, 0600); err != nil {
+				fmt.Printf("Can't write %s, %s", s[1], err)
+				break
+			}
+			fmt.Printf(".save %s completed\n", s[1])
+		case strings.HasPrefix(line, ".exit"):
 			os.Exit(0)
 		case line == ".break":
 			fmt.Printf("Clearing input %q\n", strings.Join(cmds, " "))
