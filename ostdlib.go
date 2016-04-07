@@ -20,6 +20,7 @@
 package ostdlib
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"flag"
@@ -41,7 +42,7 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.3"
+const Version = "0.0.4"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
@@ -776,15 +777,9 @@ func (js *JavaScriptVM) Repl() {
 				fmt.Println("History is readable, %s\n", err)
 				break
 			}
-			// Now append to current history file
-			fp, err := os.OpenFile(rl.Config.HistoryFile, os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				fmt.Printf("Can't append history, %s", err)
+			for _, b := range bytes.Split(buf, []byte("\n")) {
+				rl.SaveHistory(fmt.Sprintf("%s", b))
 			}
-			if _, err := fp.WriteString(fmt.Sprintf("%s", buf)); err != nil {
-				fmt.Printf("Can't append history, %s", err)
-			}
-			fp.Close()
 			fmt.Printf("%s loaded\n", s[1])
 		case strings.HasPrefix(line, ".reset"):
 			err := os.Truncate(rl.Config.HistoryFile, 0)
