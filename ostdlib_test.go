@@ -92,7 +92,7 @@ func TestHelpSystem(t *testing.T) {
 
 	js.SetHelp("test", "help", []string{"one int", "two string"}, "test.help() example")
 	js.AddHelp()
-	js.SetupAutoComplete()
+	js.AddAutoComplete()
 	isOK(t, len(js.AutoCompleter.GetChildren()) > 1, true)
 	// src, _ := json.MarshalIndent(js.Help, "", "\t")
 	// fmt.Printf("DEBUG js.Help: %s\n", src)
