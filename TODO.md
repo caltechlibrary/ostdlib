@@ -3,7 +3,6 @@
 
 ## Someday Maybe
 
-+ otto is missing Number.parseInt() see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/parseInt for polyfill
 + setTimeout() and setInterval() are missing, see https://github.com/robertkrimen/natto for possible implementation
 + Add support for "require" command to load additional JavaScript modules like with NodeJS
 + Asynchronous http implementation following NodeJS http object

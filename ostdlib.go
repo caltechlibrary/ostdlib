@@ -42,7 +42,7 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.5"
+const Version = "0.0.6"
 
 // Polyfill addes missing functionality implemented in JavaScript rather than Go
 var Polyfill = `
@@ -100,6 +100,12 @@ var Polyfill = `
 	    // return Array(count + 1).join(this);
 	    return rpt;
 	  }
+	}
+	if (!Number.prototype.parseInt) {
+		Number.prototype.parseInt = parseInt;
+	}
+	if (!Number.prototype.parseFloat) {
+		Number.prototype.parseFloat = parseFloat;
 	}
 `
 

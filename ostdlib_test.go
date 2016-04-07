@@ -100,6 +100,47 @@ func TestHelpSystem(t *testing.T) {
 	// fmt.Printf("DEBUG js.AutoCompleter: %s\n", src)
 }
 
+func TestPolyfills(t *testing.T) {
+	vm := otto.New()
+	js := New(vm)
+	js.AddExtensions()
+	// Check to see if we have a workbook with two sheets
+	val, err := js.VM.Eval(`
+		(function () {
+			if (typeof Number.prototype.parseInt !== "function") {
+				console.log("Number.parseInt() missing", typeof Number.parseInt);
+				return false;
+			}
+			if (typeof Number.prototype.parseFloat === undefined) {
+				console.log("Number.parseFloat() missing");
+				return false;
+			}
+			n = new Number;
+			i = n.parseInt("3", 10)
+			if (i !== 3) {
+				console.log('n.parseInt("3", 10) failed, i returned was', i);
+				return false;
+			}
+			f = n.parseFloat("3.14");
+			if (f !== 3.14) {
+				console.log('n.parseFloat("3.14") failed, f returned was', f);
+			}
+			return true;
+		}());
+	`)
+	if err != nil {
+		t.Errorf("xlsx.read() failed, %s", err)
+	} else {
+		testResult, err := val.ToBoolean()
+		if err != nil {
+			t.Errorf("xlsx.read(), can't read sheet count, %s", err)
+		}
+		if testResult == false {
+			t.FailNow()
+		}
+	}
+}
+
 func TestWorkbookRead(t *testing.T) {
 	vm := otto.New()
 	js := New(vm)
