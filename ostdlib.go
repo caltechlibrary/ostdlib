@@ -64,7 +64,7 @@ var (
 				return xlsx.write(name, this.__data)
 			},
 			getSheetNames: function() {
-				return Object.key(this.__data);
+				return Object.keys(this.__data);
 			},
 			getSheet: function(name) {
 				if (this.__data[name] === undefined) {
@@ -183,7 +183,7 @@ func (js *JavaScriptVM) PrintDefaultWelcome() {
 	fmt.Printf(" Welcome to %s\n\n", bold(appName))
 	fmt.Printf(" Type %s to exit or %s for help information\n (e.g. %s or %s)\n\n", bold(".exit"), bold(".help"), bold(".help os"), bold(".help os.exit"))
 	fmt.Println(" Help is available for the following objects.")
-	for k, _ := range js.Help {
+	for k := range js.Help {
 		fmt.Printf("\t%s", bold(k))
 	}
 	fmt.Println("")
@@ -267,7 +267,7 @@ func (js *JavaScriptVM) GetHelp(objectName, functionName string) {
 	return
 }
 
-// AddAutoComplete() populates the auto completion based on the help data structure
+// AddAutoComplete populates the auto completion based on the help data structure
 func (js *JavaScriptVM) AddAutoComplete() {
 	completer := readline.NewPrefixCompleter()
 	children := completer.GetChildren()
