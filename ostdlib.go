@@ -42,11 +42,59 @@ import (
 )
 
 // Version of the Otto Standard Library
-const Version = "0.0.6"
+const Version = "0.0.7"
 
-// Polyfill addes missing functionality implemented in JavaScript rather than Go
-var Polyfill = `
-    if (show === undefined) {
+var (
+	// Workbookfill wraps the xlsx object to provide a more wholistic worbook experience
+	Workbookfill = `
+	function Workbook(val) {
+    if (val === undefined) {
+			val = {};
+		}
+		return {
+			__data: val,
+			read: function (name) {
+				var data = xlsx.read(name);
+			  if (data) {
+					 return (this.__data = data);
+				}
+				return false;
+  		},
+			write: function(name) {
+				return xlsx.write(name, this.__data)
+			},
+			getSheetNames: function() {
+				return Object.key(this.__data);
+			},
+			getSheet: function(name) {
+				if (this.__data[name] === undefined) {
+					return null;
+				}
+				return this.__data[name];
+			},
+			setSheet: function(name, sheet) {
+				return (this.__data[name] = sheet);
+			},
+			getSheetNo: function (sheetNo) {
+				var names = Object.keys(this.__data);
+				if (sheetNo >= 0 && sheetNo < names.length) {
+					return this.getSheet(names[sheetNo]);
+				}
+				return null;
+			},
+			setSheetNo: function (sheetNo, sheet) {
+				var names = Object.keys(this.__data);
+				if (sheetNo >= 0 && sheetNo < names.length) {
+					return this.setSheet(names[sheetNo], sheet);
+				}
+				return this.setSheet('Untitled Sheet '+sheetNo, sheet);
+			}
+		};
+	}
+`
+	// Polyfill addes missing functionality implemented in JavaScript rather than Go
+	Polyfill = `
+  if (show === undefined) {
 		function show(obj) {
 			console.log(JSON.stringify(obj, null, "  "));
 			return ""
@@ -108,6 +156,7 @@ var Polyfill = `
 		Number.prototype.parseFloat = parseFloat;
 	}
 `
+)
 
 // HelpMsg supports storing interactive help content
 type HelpMsg struct {
@@ -126,7 +175,7 @@ type JavaScriptVM struct {
 	Help              map[string][]*HelpMsg `xml:"help" json:"help"`
 }
 
-// AddWelcomeMessage display default weclome message based on
+// PrintDefaultWelcome display default weclome message based on
 // JavaScriptVM.HelpMsg
 func (js *JavaScriptVM) PrintDefaultWelcome() {
 	bold := color.New(color.Bold).SprintFunc()
@@ -256,6 +305,7 @@ func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
 	js.SetHelp("xlsx", "read", []string{"filename string"}, "Reads in an Excel xlsx workbook file and returns an object contains the sheets found or error object")
 	js.SetHelp("xlsx", "write", []string{"filename string, sheetObject object"}, "Write an Excel xlsx workbook file and returns true on success or error object")
+	// FIXME: add Workbook object that wraps xlsx
 }
 
 // AddExtensions takes an exisitng *otto.Otto (JavaScript VM) and adds os and http objects wrapping some Go native packages
@@ -465,7 +515,6 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		if err != nil {
 			return errorObject(nil, fmt.Sprintf("%s os.mkdir(%q, %s), %s", call.CallerLocation(), newpath, perms, err))
 		}
-
 		result, _ := js.VM.ToValue(true)
 		return result
 	})
@@ -655,7 +704,7 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		markup = append(markup, fmt.Sprintf("}"))
 		result, err := js.VM.Eval(fmt.Sprintf("(function (){ return %s;}());", strings.Join(markup, "")))
 		if err != nil {
-			return errorObject(nil, fmt.Sprintf("Workbook.read(%q) error, %s, %s", fname, call.CallerLocation(), err))
+			return errorObject(nil, fmt.Sprintf("xlsx.read(%q) error, %s, %s", fname, call.CallerLocation(), err))
 		}
 		return result
 	})
@@ -663,12 +712,12 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	// Workbook.write(filename, sheetObject) returns true on success, false otherwise. sheetObject should have properties of sheet names pointing at a 2d array of strings
 	workbook.Set("write", func(call otto.FunctionCall) otto.Value {
 		if len(call.ArgumentList) != 2 {
-			return errorObject(nil, fmt.Sprintf("Workbook.write(filename, sheetsObject), missing parameters, %s", call.CallerLocation()))
+			return errorObject(nil, fmt.Sprintf("xlsx.write(filename, sheetsObject), missing parameters, %s", call.CallerLocation()))
 		}
 		fname := call.Argument(0).String()
 		data, err := call.Argument(1).Export()
 		if err != nil {
-			return errorObject(nil, fmt.Sprintf("Workbook.write(%q, sheetsObject), error %s, %s", fname, call.CallerLocation(), err))
+			return errorObject(nil, fmt.Sprintf("xlsx.write(%q, sheetsObject), error %s, %s", fname, call.CallerLocation(), err))
 		}
 		var file *xlsx.File
 
@@ -689,16 +738,21 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 		}
 		err = file.Save(fname)
 		if err != nil {
-			return errorObject(nil, fmt.Sprintf("Workbook.write(%q, sheetsObject), error %s, %s", fname, call.CallerLocation(), err))
+			return errorObject(nil, fmt.Sprintf("xlsx.write(%q, sheetsObject), error %s, %s", fname, call.CallerLocation(), err))
 		}
 		result, err := js.VM.ToValue(true)
 		if err != nil {
-			return errorObject(nil, fmt.Sprintf("Workbook.write(%q, sheetsObject) error, %s, %s", fname, call.CallerLocation(), err))
+			return errorObject(nil, fmt.Sprintf("xlsx.write(%q, sheetsObject) error, %s, %s", fname, call.CallerLocation(), err))
 		}
 		return result
 	})
+	script, err := js.VM.Compile("workbookfill", Workbookfill)
+	if err != nil {
+		log.Fatalf("Workbookfill compile error: %s\n\n%s\n", err, Workbookfill)
+	}
+	js.VM.Eval(script)
 
-	script, err := js.VM.Compile("polyfill", Polyfill)
+	script, err = js.VM.Compile("polyfill", Polyfill)
 	if err != nil {
 		log.Fatalf("polyfill compile error: %s\n\n%s\n", err, Polyfill)
 	}
@@ -769,7 +823,7 @@ func (js *JavaScriptVM) Repl() {
 		case strings.HasPrefix(line, ".list"):
 			buf, err := ioutil.ReadFile(rl.Config.HistoryFile)
 			if err != nil {
-				fmt.Println("History is readable, %s\n", err)
+				fmt.Printf("History is readable, %s\n", err)
 				break
 			}
 			fmt.Printf("%s", buf)
@@ -781,7 +835,7 @@ func (js *JavaScriptVM) Repl() {
 			}
 			buf, err := ioutil.ReadFile(s[1])
 			if err != nil {
-				fmt.Println("History is readable, %s\n", err)
+				fmt.Printf("History is readable, %s\n", err)
 				break
 			}
 			for _, b := range bytes.Split(buf, []byte("\n")) {
@@ -798,7 +852,7 @@ func (js *JavaScriptVM) Repl() {
 		case strings.HasPrefix(line, ".save"):
 			buf, err := ioutil.ReadFile(rl.Config.HistoryFile)
 			if err != nil {
-				fmt.Println("History is readable, %s\n", err)
+				fmt.Printf("History is readable, %s\n", err)
 				break
 			}
 			s := strings.SplitN(line, " ", 2)
