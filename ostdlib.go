@@ -47,23 +47,27 @@ const Version = "0.0.7"
 var (
 	// Workbookfill wraps the xlsx object to provide a more wholistic worbook experience
 	Workbookfill = `
-	function Workbook(val) {
-    if (val === undefined) {
+	xlsx.New = function (val) {
+    	if (val === undefined) {
 			val = {};
+		}
+		if (val.valueOf !== undefined) {
+			val = val.valueOf();
 		}
 		return {
 			__data: val,
 			read: function (name) {
 				var data = xlsx.read(name);
-			  if (data) {
-					 return (this.__data = data);
+			  	if (data) {
+					 this.__data = data;
+					 return true;
 				}
 				return false;
-  		},
-			write: function(name) {
+  			},
+			write: function (name) {
 				return xlsx.write(name, this.__data)
 			},
-			getSheetNames: function() {
+			getSheetNames: function () {
 				return Object.keys(this.__data);
 			},
 			getSheet: function(name) {
@@ -88,17 +92,121 @@ var (
 					return this.setSheet(names[sheetNo], sheet);
 				}
 				return this.setSheet('Untitled Sheet '+sheetNo, sheet);
+			},
+			valueOf: function () {
+				return this.__data;
+			},
+			toString: function() {
+				return JSON.stringify(this.__data);
 			}
 		};
-	}
+	};
+	var Workbook = xlsx.New();
 `
 	// Polyfill addes missing functionality implemented in JavaScript rather than Go
 	Polyfill = `
-  if (show === undefined) {
-		function show(obj) {
-			console.log(JSON.stringify(obj, null, "  "));
-			return ""
-		}
+	if (typeof Object.create !== 'function') {
+	  Object.create = (function() {
+	    var Temp = function() {};
+	    return function (prototype) {
+	      if (arguments.length > 1) {
+	        throw Error('Second argument not supported');
+	      }
+	      if(prototype !== Object(prototype) && prototype !== null) {
+	        throw TypeError('Argument must be an object or null');
+	     }
+	     if (prototype === null) {
+	        throw Error('null [[Prototype]] not supported');
+	      }
+	      Temp.prototype = prototype;
+	      var result = new Temp();
+	      Temp.prototype = null;
+	      return result;
+	    };
+	  })();
+	}
+	if (typeof Object.defineProperties !== 'function') {
+		Object.defineProperties = function (obj, properties) {
+		  function convertToDescriptor(desc) {
+		    function hasProperty(obj, prop) {
+		      return Object.prototype.hasOwnProperty.call(obj, prop);
+		    }
+
+		    function isCallable(v) {
+		      // NB: modify as necessary if other values than functions are callable.
+		      return typeof v === "function";
+		    }
+
+		    if (typeof desc !== "object" || desc === null)
+		      throw new TypeError("bad desc");
+
+		    var d = {};
+
+		    if (hasProperty(desc, "enumerable"))
+		      d.enumerable = !!desc.enumerable;
+		    if (hasProperty(desc, "configurable"))
+		      d.configurable = !!desc.configurable;
+		    if (hasProperty(desc, "value"))
+		      d.value = desc.value;
+		    if (hasProperty(desc, "writable"))
+		      d.writable = !!desc.writable;
+		    if (hasProperty(desc, "get")) {
+		      var g = desc.get;
+
+		      if (!isCallable(g) && typeof g !== "undefined")
+		        throw new TypeError("bad get");
+		      d.get = g;
+		    }
+		    if (hasProperty(desc, "set")) {
+		      var s = desc.set;
+		      if (!isCallable(s) && typeof s !== "undefined")
+		        throw new TypeError("bad set");
+		      d.set = s;
+		    }
+
+		    if (("get" in d || "set" in d) && ("value" in d || "writable" in d))
+		      throw new TypeError("identity-confused descriptor");
+
+		    return d;
+		  }
+
+		  if (typeof obj !== "object" || obj === null)
+		    throw new TypeError("bad obj");
+
+		  properties = Object(properties);
+
+		  var keys = Object.keys(properties);
+		  var descs = [];
+
+		  for (var i = 0; i < keys.length; i++)
+		    descs.push([keys[i], convertToDescriptor(properties[keys[i]])]);
+
+		  for (var i = 0; i < descs.length; i++)
+		    Object.defineProperty(obj, descs[i][0], descs[i][1]);
+
+		  return obj;
+		};
+	}
+	if (typeof Object.assign !== 'function') {
+	    Object.assign = function (target) {
+	      'use strict';
+	      if (target === undefined || target === null) {
+	        throw new TypeError('Cannot convert undefined or null to object');
+	      }
+
+	      var output = Object(target);
+	      for (var index = 1; index < arguments.length; index++) {
+	        var source = arguments[index];
+	        if (source !== undefined && source !== null) {
+	          for (var nextKey in source) {
+	            if (source.hasOwnProperty(nextKey)) {
+	              output[nextKey] = source[nextKey];
+	            }
+	          }
+	        }
+	      }
+	      return output;
+	    };
 	}
 	if (!Date.prototype.now) {
 		Date.prototype.now = function now() {
@@ -305,7 +413,17 @@ func (js *JavaScriptVM) AddHelp() {
 	js.SetHelp("http", "post", []string{"uri string", "headers []object", "payload string"}, "Performs a synchronous http POST operation")
 	js.SetHelp("xlsx", "read", []string{"filename string"}, "Reads in an Excel xlsx workbook file and returns an object contains the sheets found or error object")
 	js.SetHelp("xlsx", "write", []string{"filename string, sheetObject object"}, "Write an Excel xlsx workbook file and returns true on success or error object")
-	// FIXME: add Workbook object that wraps xlsx
+	js.SetHelp("xlsx", "New", []string{}, "Constructor for Workbook object")
+	// Help for JavaScript native Workbook object that wraps xlsx
+	js.SetHelp("Workbook", "read", []string{"filename string"}, "reads an xlsx file into the workbook")
+	js.SetHelp("Workbook", "write", []string{"filename string"}, "write an xlsx file from the workbook")
+	js.SetHelp("Workbook", "getSheetNames", []string{}, "returns an array of names of the spreadsheets in a workbook")
+	js.SetHelp("Workbook", "getSheet", []string{"name string"}, "get the individual spreadsheet by name from the workbook")
+	js.SetHelp("Workbook", "setSheet", []string{"name string", "sheet is a 2D array of rows and cells"}, "set a spreadsheet by name to the rows and cell defined by sheet")
+	js.SetHelp("Workbook", "getSheetNo", []string{"sheetNo int"}, "get the individual spreadsheet by sheet no. from the workbook")
+	js.SetHelp("Workbook", "setSheetNo", []string{"sheetNo", "sheet is a 2D array of rows and cells"}, "set a spreadsheet by sheet no. to the rows and cell defined by sheet")
+	js.SetHelp("Workbook", "valueOf", []string{}, "returns the __data attribute of the workbook")
+	js.SetHelp("Workbook", "toString", []string{}, "returns a JSON view of __data attribute of the workbook")
 }
 
 // AddExtensions takes an exisitng *otto.Otto (JavaScript VM) and adds os and http objects wrapping some Go native packages

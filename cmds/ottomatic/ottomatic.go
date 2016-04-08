@@ -47,7 +47,7 @@ func main() {
 		fmt.Printf("\nVersion %s\n", ostdlib.Version)
 		os.Exit(0)
 	case showVersion == true:
-		fmt.Printf("\nVersion %s\n", ostdlib.Version)
+		fmt.Printf("Version %s\n", ostdlib.Version)
 		os.Exit(0)
 	}
 
