@@ -24,6 +24,7 @@ _testmain.go
 *.prof
 
 # Local excluded bits
+*.swp
 ottomatic
 bin/*
 testout.xlsx
