@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 
@@ -41,9 +40,13 @@ func main() {
 		fmt.Println(`
  USAGE: ottomatic [OPTIONS] [JAVASCRIPT_FILENAMES]
 
+  -h	display this help information
+  -i	Run in interactive mode
+  -v	display version information
+
 `)
 		// FIXME: this writes to stderr, need to write to stdout
-		flag.PrintDefaults()
+		//flag.PrintDefaults()
 		fmt.Printf("\nVersion %s\n", ostdlib.Version)
 		os.Exit(0)
 	case showVersion == true:
@@ -57,29 +60,21 @@ func main() {
 
 	// Add objects (e.g. os, http and polyfills)
 	js.AddExtensions()
-	// Add extension help
-	js.AddHelp()
-	// Add autocomplete based on current state of js.Help
-	js.AddAutoComplete()
-	// Print Default Welcome message
-	js.PrintDefaultWelcome()
 
+	// for each JavaScript file presented, run it.
 	args := flag.Args()
 	if len(args) == 0 {
 		runRepl = true
+	} else {
+		js.Runner(args)
 	}
-	for _, scriptname := range args {
-		src, err := ioutil.ReadFile(scriptname)
-		check((err != nil), scriptname, err)
-
-		script, err := vm.Compile(scriptname, src)
-		check((err != nil), scriptname, err)
-
-		_, err = vm.Eval(script)
-		check((err != nil), scriptname, err)
-	}
-
 	if runRepl == true {
+		// Add extension help
+		js.AddHelp()
+		// Add autocomplete based on current state of js.Help
+		js.AddAutoComplete()
+		// Print Default Welcome message
+		js.PrintDefaultWelcome()
 		js.Repl()
 	}
 	os.Exit(0)
