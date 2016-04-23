@@ -1054,6 +1054,11 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	return js.VM
 }
 
+// Eval evaluate some JavaScript source code
+func (js *JavaScriptVM) Eval(script string) (otto.Value, error) {
+	return js.VM.Eval(script)
+}
+
 // Run executes a specific JavaScirpt file
 func (js *JavaScriptVM) Run(fname string) error {
 	src, err := ioutil.ReadFile(fname)
