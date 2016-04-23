@@ -1054,19 +1054,27 @@ func (js *JavaScriptVM) AddExtensions() *otto.Otto {
 	return js.VM
 }
 
+// Run executes a specific JavaScirpt file
+func (js *JavaScriptVM) Run(fname string) error {
+	src, err := ioutil.ReadFile(fname)
+	if err != nil {
+		return fmt.Errorf("Can't read file %s, %s", fname, err)
+	}
+	script, err := js.VM.Compile(fname, src)
+	if err != nil {
+		return fmt.Errorf("%s, %s", fname, err)
+	}
+	_, err = js.VM.Eval(script)
+	if err != nil {
+		return fmt.Errorf("%s, %s", fname, err)
+	}
+	return nil
+}
+
 // Runner given a list of JavaScript filenames run the files
 func (js *JavaScriptVM) Runner(filenames []string) {
 	for _, fname := range filenames {
-		src, err := ioutil.ReadFile(fname)
-		if err != nil {
-			log.Fatalf("Can't read file %s, %s", fname, err)
-		}
-		script, err := js.VM.Compile(fname, src)
-		if err != nil {
-			log.Fatalf("%s", err)
-		}
-		_, err = js.VM.Eval(script)
-		if err != nil {
+		if err := js.Run(fname); err != nil {
 			log.Fatalf("%s", err)
 		}
 	}
