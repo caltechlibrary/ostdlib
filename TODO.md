@@ -11,4 +11,5 @@
 + Asynchronous http implementation following NodeJS http object
 + Asynchronous read/write for xlsx object
 + Add a map/reduce ability to xlsx objects
++ Review https://github.com/deoxxa/ottoext and see what might be relavant for ostdlib
 
